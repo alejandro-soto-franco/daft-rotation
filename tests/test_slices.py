@@ -1,3 +1,31 @@
+"""End-to-end tests that a sliced/filtered column reads the correct rows.
+
+These tests push a `FixedSizeListArray` through a Daft `.where()` filter,
+which produces an array carrying a non-zero offset, and assert that the
+kernel returns the correct value for every row. They do not pin the
+"row * width" indexing defect once believed to lurk in `FixedRows::get`,
+and Daft's own `examples/dvector/src/vectors.rs` does not carry that defect
+either.
+
+Finding, verified against `arrow-array-57.3.0/src/array/fixed_size_list_array.rs`:
+`impl From<ArrayData> for FixedSizeListArray` (~line 442) folds the parent's
+offset into the child at construction
+(`data.child_data()[0].slice(data.offset() * size, data.len() * size)`),
+`offset()` is hard-coded to return 0 (~line 502), and `value_offset_at(i)` is
+plain `i * value_length` with no offset term. So `values()[i * width ..]` and
+`value(i)` compute the same thing on this arrow-rs version: no test built
+against the public API can distinguish manual `row * width` arithmetic from
+the `value(i)` accessor here.
+
+`FixedRows` still uses `value(i)` rather than manual arithmetic, because
+`value(i)` is correct whether or not arrow-rs folds the offset eagerly,
+whereas manual arithmetic on `values()` silently depends on that folding
+behaviour, an implementation detail rather than part of arrow-rs's public
+contract. These tests stay useful as end-to-end coverage of sliced/filtered
+input, and as a guard against a future arrow-rs that stops folding offsets
+eagerly.
+"""
+
 from __future__ import annotations
 
 import daft
@@ -13,10 +41,11 @@ def _fsl4():
 def test_sliced_input_reads_the_right_rows(sess):
     """A non-zero array offset must not shift the values read.
 
-    The kernel must reach rows through arrow accessors that compose the
-    array's own offset. Indexing a flat child buffer with row*width silently
-    reads a window shifted by offset*width, which returns wrong rotations
-    rather than an error. This is the bug dvector's float path still has.
+    Filtering with `.where()` produces a sliced array with a non-zero offset
+    downstream; this checks that every row still resolves to its correct
+    quaternion end to end. See the module docstring for why this cannot
+    distinguish `value(i)` from manual `row * width` arithmetic on the
+    pinned arrow-rs version, and why `FixedRows` uses `value(i)` regardless.
     """
     quats = [
         [0.0, 0.0, 0.0, 1.0],
@@ -42,6 +71,14 @@ def test_sliced_input_reads_the_right_rows(sess):
 
 
 def test_limit_offset_slice_reads_the_right_rows(sess):
+    """A non-zero offset from `.where()` must preserve per-row sign and order.
+
+    Companion to `test_sliced_input_reads_the_right_rows`: each row bakes in
+    its own integer index, so both the sign and the ordering of the returned
+    values pin the offset, not just its magnitude. As with that test, this
+    cannot distinguish `value(i)` from manual `row * width` arithmetic on the
+    pinned arrow-rs version; see the module docstring.
+    """
     quats = [[float(i), 0.0, 0.0, 1.0] for i in range(10)]
     df = daft.from_pydict({"q": quats, "i": list(range(10))})
     df = df.select(df["q"].cast(_fsl4()), df["i"])

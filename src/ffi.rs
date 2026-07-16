@@ -1,9 +1,12 @@
 //! Shared plumbing between the FFI boundary and `crate::math`.
 //!
-//! Row access goes through arrow-rs accessors that compose the array's own
-//! offset. Never index a child buffer with `row * width` arithmetic: a sliced
-//! input carries a non-zero offset and that arithmetic silently reads the
-//! wrong window. See tests/test_slices.py.
+//! Row access goes through arrow-rs accessors (`value(i)`) rather than
+//! indexing a child buffer with `row * width` arithmetic. On the pinned
+//! arrow-rs version, `FixedSizeListArray` folds a parent's offset into the
+//! child at construction, so the two computations happen to agree today;
+//! `value(i)` is used because it stays correct regardless of that folding
+//! behaviour, which is an implementation detail and not part of arrow-rs's
+//! public contract. See tests/test_slices.py.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -54,9 +57,12 @@ impl<'a> FixedRows<'a> {
 
     /// The `i`th row, or `None` when the row is null or holds a null component.
     ///
-    /// Parent offsets are folded into child values at construction, so `value(i)`
-    /// correctly handles sliced parents. Do not index `self.array.values()` with
-    /// `i * width` arithmetic; it re-reads the unfolded buffer with a shifted window.
+    /// Uses `value(i)` rather than indexing `self.array.values()` with
+    /// `i * width` arithmetic. On the pinned arrow-rs version the parent's
+    /// offset is already folded into the child at construction, so the two
+    /// computations happen to agree today; `value(i)` is preferred because it
+    /// does not depend on that folding behaviour, which is an implementation
+    /// detail rather than part of arrow-rs's public contract.
     pub(crate) fn get(&self, i: usize) -> Option<[f64; 4]> {
         assert_eq!(self.width, 4, "get() is the 4-wide specialisation");
         if self.array.is_null(i) {
