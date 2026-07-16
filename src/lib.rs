@@ -20,5 +20,11 @@ impl DaftExtension for RotationExtension {
             session.define_function(Arc::new(functions::QuatInverse(order)));
             session.define_function(Arc::new(functions::QuatMultiply(order)));
         }
+
+        session.define_function(Arc::new(functions::Rot6dToMatrix));
+        for order in [None, Some(math::QuatOrder::Xyzw), Some(math::QuatOrder::Wxyz)] {
+            session.define_function(Arc::new(functions::QuatToMatrix(order)));
+            session.define_function(Arc::new(functions::QuatRotate(order)));
+        }
     }
 }

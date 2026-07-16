@@ -4,10 +4,11 @@ use arrow_array::{
     ArrayRef, Float64Array,
     builder::{FixedSizeListBuilder, Float64Builder},
 };
+use arrow_schema::Field;
 use daft_ext::prelude::{ArrowData, ArrowSchema, DaftError, DaftResult, DaftScalarFunction, export_array, export_field, import_array, import_field};
 
 use crate::{
-    ffi::{FixedRows, float64_field, quat_storage},
+    ffi::{FixedRows, float64_field, quat_storage, tensor3x3_field, vec3_storage},
     math::{self, QuatOrder},
     order::{quat_field, resolve_order},
 };
@@ -94,24 +95,12 @@ impl DaftScalarFunction for MatrixToQuat {
 
         let mut builder = FixedSizeListBuilder::new(Float64Builder::new(), 4);
         for i in 0..rows.len() {
-            match rows.get_vec(i).and_then(|m| {
+            let q = rows.get_vec(i).and_then(|m| {
                 let m: [f64; 9] = m.try_into().ok()?;
                 // None for a matrix outside SO(3), which is how null propagates.
                 math::mat_to_quat(m)
-            }) {
-                Some(q) => {
-                    for c in self.0.write(q) {
-                        builder.values().append_value(c);
-                    }
-                    builder.append(true);
-                }
-                None => {
-                    for _ in 0..4 {
-                        builder.values().append_null();
-                    }
-                    builder.append(false);
-                }
-            }
+            });
+            crate::ffi::append_row(&mut builder, q.map(|q| self.0.write(q)), 4);
         }
         let out: ArrayRef = Arc::new(builder.finish());
         // export_array drops metadata, which is irrelevant: the host wraps the
@@ -156,20 +145,8 @@ impl DaftScalarFunction for QuatInverse {
 
         let mut builder = FixedSizeListBuilder::new(Float64Builder::new(), 4);
         for i in 0..rows.len() {
-            match rows.get(i).and_then(|raw| math::inverse(order.read(&raw))) {
-                Some(r) => {
-                    for c in order.write(r) {
-                        builder.values().append_value(c);
-                    }
-                    builder.append(true);
-                }
-                None => {
-                    for _ in 0..4 {
-                        builder.values().append_null();
-                    }
-                    builder.append(false);
-                }
-            }
+            let r = rows.get(i).and_then(|raw| math::inverse(order.read(&raw)));
+            crate::ffi::append_row(&mut builder, r.map(|q| order.write(q)), 4);
         }
         export_array(Arc::new(builder.finish()), "quat_inverse")
     }
@@ -221,22 +198,135 @@ impl DaftScalarFunction for QuatMultiply {
                 (Some(x), Some(y)) => Some(math::multiply(a_order.read(&x), b_order.read(&y))),
                 _ => None,
             };
-            match product {
-                Some(p) => {
-                    // Output carries the left argument's convention.
-                    for c in a_order.write(p) {
-                        builder.values().append_value(c);
-                    }
-                    builder.append(true);
-                }
-                None => {
-                    for _ in 0..4 {
-                        builder.values().append_null();
-                    }
-                    builder.append(false);
-                }
-            }
+            // Output carries the left argument's convention.
+            crate::ffi::append_row(&mut builder, product.map(|p| a_order.write(p)), 4);
         }
         export_array(Arc::new(builder.finish()), "quat_multiply")
+    }
+}
+
+pub(crate) struct Rot6dToMatrix;
+
+impl DaftScalarFunction for Rot6dToMatrix {
+    fn name(&self) -> &CStr {
+        c"rotation_rot6d_to_matrix"
+    }
+
+    fn return_field(&self, args: &[ArrowSchema]) -> DaftResult<ArrowSchema> {
+        if args.len() != 1 {
+            return Err(DaftError::TypeError(format!(
+                "rot6d_to_matrix expects 1 argument, got {}",
+                args.len()
+            )));
+        }
+        let field = import_field(&args[0])?;
+        export_field(&tensor3x3_field(field.name()))
+    }
+
+    fn call(&self, args: Vec<ArrowData>) -> DaftResult<ArrowData> {
+        let r = import_array(args.into_iter().next().expect("arity checked"))?;
+        let rows = FixedRows::new(&r, 6, "rot6d_to_matrix")?;
+
+        let mut builder = FixedSizeListBuilder::new(Float64Builder::new(), 9);
+        for i in 0..rows.len() {
+            let m = rows.get_vec(i).and_then(|r| math::rot6d_to_mat(&r));
+            crate::ffi::append_row(&mut builder, m, 9);
+        }
+        export_array(Arc::new(builder.finish()), "rot6d_to_matrix")
+    }
+}
+
+pub(crate) struct QuatToMatrix(pub(crate) Option<QuatOrder>);
+
+impl DaftScalarFunction for QuatToMatrix {
+    fn name(&self) -> &CStr {
+        match self.0 {
+            None => c"rotation_quat_to_matrix",
+            Some(QuatOrder::Xyzw) => c"rotation_quat_to_matrix_xyzw",
+            Some(QuatOrder::Wxyz) => c"rotation_quat_to_matrix_wxyz",
+        }
+    }
+
+    fn return_field(&self, args: &[ArrowSchema]) -> DaftResult<ArrowSchema> {
+        if args.len() != 1 {
+            return Err(DaftError::TypeError(format!(
+                "quat_to_matrix expects 1 argument, got {}",
+                args.len()
+            )));
+        }
+        let field = import_field(&args[0])?;
+        // The input needs a convention; the output is a matrix and carries none.
+        resolve_order(&field, self.0)?;
+        export_field(&tensor3x3_field(field.name()))
+    }
+
+    fn call(&self, args: Vec<ArrowData>) -> DaftResult<ArrowData> {
+        let data = args.into_iter().next().expect("arity checked");
+        let order = resolve_order(&import_field(&data.schema)?, self.0)?;
+        let q = import_array(data)?;
+        let rows = FixedRows::new(&q, 4, "quat_to_matrix")?;
+
+        let mut builder = FixedSizeListBuilder::new(Float64Builder::new(), 9);
+        for i in 0..rows.len() {
+            let m = rows.get(i).and_then(|raw| math::quat_to_mat(order.read(&raw)));
+            crate::ffi::append_row(&mut builder, m, 9);
+        }
+        export_array(Arc::new(builder.finish()), "quat_to_matrix")
+    }
+}
+
+pub(crate) struct QuatRotate(pub(crate) Option<QuatOrder>);
+
+impl DaftScalarFunction for QuatRotate {
+    fn name(&self) -> &CStr {
+        match self.0 {
+            None => c"rotation_quat_rotate",
+            Some(QuatOrder::Xyzw) => c"rotation_quat_rotate_xyzw",
+            Some(QuatOrder::Wxyz) => c"rotation_quat_rotate_wxyz",
+        }
+    }
+
+    fn return_field(&self, args: &[ArrowSchema]) -> DaftResult<ArrowSchema> {
+        if args.len() != 2 {
+            return Err(DaftError::TypeError(format!(
+                "quat_rotate expects 2 arguments, got {}",
+                args.len()
+            )));
+        }
+        let q = import_field(&args[0])?;
+        // Only the quaternion carries a convention. The vector does not, and
+        // must not be passed to resolve_order: it would be rejected as an
+        // untyped quaternion and the error would name the wrong argument.
+        resolve_order(&q, self.0)?;
+        export_field(&Field::new(q.name(), vec3_storage(), true))
+    }
+
+    fn call(&self, args: Vec<ArrowData>) -> DaftResult<ArrowData> {
+        let mut it = args.into_iter();
+        let q_data = it.next().expect("arity checked");
+        let v_data = it.next().expect("arity checked");
+        let order = resolve_order(&import_field(&q_data.schema)?, self.0)?;
+
+        let q = import_array(q_data)?;
+        let v = import_array(v_data)?;
+        let qr = FixedRows::new(&q, 4, "quat_rotate: quaternion")?;
+        let vr = FixedRows::new(&v, 3, "quat_rotate: vector")?;
+        let n = crate::ffi::broadcast_len(&[qr.len(), vr.len()], "quat_rotate")?;
+
+        let mut builder = FixedSizeListBuilder::new(Float64Builder::new(), 3);
+        for i in 0..n {
+            let rotated = match (qr.get_broadcast(i), vr.get_vec_broadcast(i)) {
+                (Some(raw), Some(v)) => {
+                    let v: [f64; 3] = match v.try_into() {
+                        Ok(v) => v,
+                        Err(_) => unreachable!("FixedRows::new pinned the width to 3"),
+                    };
+                    math::rotate(order.read(&raw), v)
+                }
+                _ => None,
+            };
+            crate::ffi::append_row(&mut builder, rotated, 3);
+        }
+        export_array(Arc::new(builder.finish()), "quat_rotate")
     }
 }

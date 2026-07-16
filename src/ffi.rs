@@ -5,9 +5,13 @@
 //! input carries a non-zero offset and that arithmetic silently reads the
 //! wrong window. See tests/test_slices.py.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use arrow_array::{Array, ArrayRef, FixedSizeListArray, Float64Array, cast::AsArray};
+use arrow_array::{
+    Array, ArrayRef, FixedSizeListArray, Float64Array,
+    builder::{FixedSizeListBuilder, Float64Builder},
+    cast::AsArray,
+};
 use arrow_schema::{DataType, Field};
 use daft_ext::prelude::{DaftError, DaftResult};
 
@@ -117,5 +121,72 @@ impl FixedRows<'_> {
     /// The `i`th row, treating a length-1 column as a broadcast constant.
     pub(crate) fn get_broadcast(&self, i: usize) -> Option<[f64; 4]> {
         self.get(if self.len() == 1 { 0 } else { i })
+    }
+}
+
+/// The storage type of a 3x3 rotation matrix column: the FixedSizeList that
+/// backs the arrow.fixed_shape_tensor extension type.
+pub(crate) fn tensor_storage() -> DataType {
+    DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float64, true)), 9)
+}
+
+/// A `Tensor[Float64, [3, 3]]` output field.
+///
+/// The extension tag is what makes this a tensor rather than a flat list of 9:
+/// Daft's decoder reads ARROW:extension:name and the JSON shape metadata and
+/// rebuilds DataType::FixedShapeTensor. Storage alone is not enough.
+pub(crate) fn tensor3x3_field(name: &str) -> Field {
+    let mut md = HashMap::new();
+    md.insert(
+        "ARROW:extension:name".to_string(),
+        "arrow.fixed_shape_tensor".to_string(),
+    );
+    md.insert(
+        "ARROW:extension:metadata".to_string(),
+        r#"{"shape":[3,3]}"#.to_string(),
+    );
+    Field::new(name, tensor_storage(), true).with_metadata(md)
+}
+
+/// The storage type of a 3-vector column. A plain fixed-size list, not an
+/// extension type: a 3-vector carries no shape metadata and needs no tag.
+pub(crate) fn vec3_storage() -> DataType {
+    DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float64, true)), 3)
+}
+
+impl FixedRows<'_> {
+    /// The `i`th row as a `Vec`, treating a length-1 column as a broadcast constant.
+    pub(crate) fn get_vec_broadcast(&self, i: usize) -> Option<Vec<f64>> {
+        self.get_vec(if self.len() == 1 { 0 } else { i })
+    }
+}
+
+/// Append one row to a fixed-size list builder, or a null row.
+///
+/// The null path must append exactly `width` child values before `append(false)`:
+/// `FixedSizeListBuilder::finish` asserts `values.len() == len * list_len`, so a wrong
+/// count panics there rather than corrupting later rows. Centralising it means that
+/// contract is honoured in one place instead of six.
+pub(crate) fn append_row(
+    builder: &mut FixedSizeListBuilder<Float64Builder>,
+    row: Option<impl IntoIterator<Item = f64>>,
+    width: usize,
+) {
+    match row {
+        Some(values) => {
+            let mut n = 0;
+            for v in values {
+                builder.values().append_value(v);
+                n += 1;
+            }
+            debug_assert_eq!(n, width, "append_row: row had {n} values, expected {width}");
+            builder.append(true);
+        }
+        None => {
+            for _ in 0..width {
+                builder.values().append_null();
+            }
+            builder.append(false);
+        }
     }
 }

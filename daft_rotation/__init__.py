@@ -22,6 +22,9 @@ __all__ = [
     "quat",
     "quat_inverse",
     "quat_multiply",
+    "quat_rotate",
+    "quat_to_matrix",
+    "rot6d_to_matrix",
     "rotation_geodesic_angle",
 ]
 
@@ -169,3 +172,63 @@ def quat_inverse(quaternion: Expression, *, order: QuatOrder | None = None) -> E
         Expression (Quaternion Expression): The inverse, extension-typed.
     """
     return daft.get_function(_fn("rotation_quat_inverse", order), quaternion)
+
+
+def rot6d_to_matrix(rot6d: Expression) -> Expression:
+    """Converts the 6D continuous rotation representation into a 3x3 rotation matrix.
+
+    The six values are the first two columns of the matrix. They are orthonormalised
+    by Gram-Schmidt, and the third column is their cross product, so the result always
+    lies in SO(3). This is the representation of Zhou et al. (2019), widely used as a
+    network output because it is continuous, unlike quaternions and Euler angles.
+
+    Rows whose two vectors are zero or parallel, or which hold a non-finite value,
+    produce null, since they determine no rotation.
+
+    Args:
+        rot6d (FixedSizeList[Float64, 6] Expression): The 6D rotation representation.
+
+    Returns:
+        Expression (Tensor[Float64, [3, 3]] Expression): The rotation matrix.
+    """
+    return daft.get_function("rotation_rot6d_to_matrix", rot6d)
+
+
+def quat_to_matrix(quaternion: Expression, *, order: QuatOrder | None = None) -> Expression:
+    """Converts a quaternion into a 3x3 rotation matrix.
+
+    The quaternion is normalised first. Zero quaternions, and rows holding a
+    non-finite value, produce null.
+
+    Args:
+        quaternion (Quaternion Expression): The quaternion.
+        order (str, optional): Component order, "xyzw" or "wxyz". Omit for columns
+            that declare their own via ``quat``. Required for plain columns; there
+            is no default convention.
+
+    Returns:
+        Expression (Tensor[Float64, [3, 3]] Expression): The rotation matrix.
+    """
+    return daft.get_function(_fn("rotation_quat_to_matrix", order), quaternion)
+
+
+def quat_rotate(
+    quaternion: Expression, vector: Expression, *, order: QuatOrder | None = None
+) -> Expression:
+    """Rotates a 3-vector by a quaternion.
+
+    The quaternion is normalised first, so the length of the vector is preserved.
+    Zero quaternions, and rows where the quaternion or the vector holds a
+    non-finite value, produce null.
+
+    Args:
+        quaternion (Quaternion Expression): The quaternion.
+        vector (FixedSizeList[Float64, 3] Expression): The vector to rotate.
+        order (str, optional): Component order of the quaternion, "xyzw" or "wxyz".
+            Omit for columns that declare their own via ``quat``. Required for plain
+            columns; there is no default convention.
+
+    Returns:
+        Expression (FixedSizeList[Float64, 3] Expression): The rotated vector.
+    """
+    return daft.get_function(_fn("rotation_quat_rotate", order), quaternion, vector)
