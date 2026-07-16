@@ -2,9 +2,8 @@
 
 ## arrow types as of 2026-07-16
 
-Recorded by running `probe/dump_schema.py` against the `daft` 0.3.0-dev0
-checkout at `/home/alejandrosotofranco/daft`, with
-`/home/alejandrosotofranco/.venvs/global/bin/python`.
+Recorded by running `probe/dump_schema.py` against a `daft` 0.3.0-dev0 source
+checkout, installed editable into the environment this package was built in.
 
 ### Why this script flattens the matrix
 
