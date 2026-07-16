@@ -8,36 +8,58 @@ Rotations are the most common non-scalar quantity in robot trajectory, camera ex
 
 ## Install
 
-Currently, this package builds only against a local Daft checkout:
+Currently, this package builds only against a local Daft checkout, and it must be a **sibling directory** of `daft-rotation`: `Cargo.toml` depends on `../daft/src/daft-ext` and `pyproject.toml`'s `[tool.uv.sources]` depends on `../daft`, both relative paths.
 
 ```bash
+git clone https://github.com/eventual-inc/daft.git
 git clone https://github.com/alejandrosotofranco/daft-rotation.git
 cd daft-rotation
 pip install -e .
 ```
 
-This is necessary because the published `daft-ext` SDK has not yet stabilised its API. Once the extension system reaches stability, standard `pip install daft-rotation` will work.
+This leaves `daft` and `daft-rotation` as siblings under the same parent directory. It is necessary because the published `daft-ext` SDK has not yet stabilised its API and lacks the prelude helpers and the `daft_extension` macro this crate depends on. Once the extension system reaches stability, standard `pip install daft-rotation` will work.
 
 ## Example
 
 ```python
 import daft
+from daft.session import Session
+
+import daft_rotation
 from daft_rotation import quat, quat_multiply
 
-# Load a table with quaternion columns in xyzw order
-df = daft.read_parquet("robot_trajectories.parquet")
+# Kernel-backed functions dispatch through daft.get_function, which
+# requires the extension to be loaded into an active session first.
+session = Session()
+session.load_extension(daft_rotation)
 
-# Declare the convention once
-df = df.with_column("joint_quat", quat(df["joint_quat"], "xyzw"))
+with session:
+    # A table with quaternion columns in xyzw order
+    df = daft.from_pydict(
+        {
+            "joint_quat": [
+                [0.0, 0.0, 0.0, 1.0],
+                [0.0, 0.0, 0.7071067811865476, 0.7071067811865476],
+            ],
+            "tool_offset_quat": [
+                [0.0, 0.0, 0.0, 1.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+        }
+    )
 
-# Compose rotations (left is applied after right)
-df = df.with_column(
-    "composed",
-    quat_multiply(df["joint_quat"], df["tool_offset_quat"])
-)
+    # Declare the convention once per column
+    df = df.with_column("joint_quat", quat(df["joint_quat"], "xyzw"))
+    df = df.with_column("tool_offset_quat", quat(df["tool_offset_quat"], "xyzw"))
 
-# Retrieve the result
-df.select("composed").show()
+    # Compose rotations (left is applied after right)
+    df = df.with_column(
+        "composed",
+        quat_multiply(df["joint_quat"], df["tool_offset_quat"]),
+    )
+
+    # Retrieve the result
+    df.select("composed").show()
 ```
 
 ## Quaternion component order
@@ -61,7 +83,25 @@ df = df.with_column("rotated", quat_rotate(df["raw_q"], df["v"], order="wxyz"))
 A column without a declared order is an error, not a guess. If you do not know which convention your data uses, inspect it first:
 
 ```python
+import daft
 from daft_rotation import infer_quat_order
+
+# A handful of near-identity frames (small rotations), xyzw order
+rows = [
+    [0.000859, -0.017163, -0.001102, 0.999852],
+    [-0.003873, -0.000581, 0.002694, 0.999989],
+    [0.00095, 0.000549, 0.000408, 0.999999],
+    [-0.000403, -0.009408, -0.008655, 0.999918],
+    [0.018999, -0.002063, 0.007379, 0.99979],
+    [-0.003576, 0.008788, -0.006483, 0.999934],
+    [-0.000598, -0.000439, 0.001179, 0.999999],
+    [-0.013483, -0.018839, 0.00274, 0.999728],
+    [-0.002524, 0.007006, -0.009378, 0.999928],
+    [-0.000477, -0.002282, 0.00449, 0.999987],
+    [0.024916, -0.001006, -0.000421, 0.999689],
+    [0.010463, 0.005531, 0.014249, 0.999828],
+]
+df = daft.from_pydict({"q": rows})
 
 report = infer_quat_order(df, "q")
 print(report)
@@ -70,13 +110,12 @@ print(report)
 Output:
 
 ```
-OrderReport(
-    column='q',
-    n_samples=1000,
-    n_valid=987,
-    hypothesis='xyzw',
-    evidence='0.98 (unit quaternions), score_xyzw=0.997 > score_wxyz=0.003'
-)
+sampled 12 rows
+  slot 0: mean|v|=0.0068 var=0.0001
+  slot 3: mean|v|=0.9999 var=0.0000
+  likely: xyzw (confidence: high)
+  basis: slot 3 concentrates near |1|, consistent with a scalar component over near-identity frames
+  declare it with: quat(col, "xyzw")
 ```
 
 The library reports the evidence, never decides. You then declare it explicitly.
