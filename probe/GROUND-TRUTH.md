@@ -6,9 +6,9 @@ Recorded by running `probe/dump_schema.py` against the `daft` 0.3.0-dev0
 checkout at `/home/alejandrosotofranco/daft`, with
 `/home/alejandrosotofranco/.venvs/global/bin/python`.
 
-### Deviation from the task brief's literal probe script
+### Why this script flattens the matrix
 
-The brief's `probe/dump_schema.py` casts a **nested** list of lists
+An earlier version of `probe/dump_schema.py` cast a **nested** list of lists
 (`[[1,0,0],[0,1,0],[0,0,1]]`) directly to `Tensor[Float64, (3, 3)]`. On this
 Daft build that raises, at `to_arrow()` time:
 
@@ -18,19 +18,18 @@ to FixedSizeList because not all elements have sizes: 9
 ```
 
 This reproduces identically whether the nested list appears in the probe
-script or in the task brief's verbatim `tests/test_rotation.py` (verified by
-running the exact `IDENTITY`/`.cast(daft.DataType.tensor(...))` snippet from
-Step 4 standalone). Daft's own `daft/tests/expressions/test_rotation.py`
-(which defines the real `rotation_geodesic_angle` etc. that this crate's
-functions are meant to match) never casts a nested list either — it always
-flattens first: `m.flatten().tolist()` before `.cast(MAT3)`.
+script or in `tests/test_rotation.py` (verified by running the exact
+`IDENTITY`/`.cast(daft.DataType.tensor(...))` snippet standalone). Daft's own
+`daft/tests/expressions/test_rotation.py` (which defines the real
+`rotation_geodesic_angle` etc. that this crate's functions are meant to
+match) never casts a nested list either; it always flattens first:
+`m.flatten().tolist()` before `.cast(MAT3)`.
 
-`probe/dump_schema.py` was corrected to build the tensor column from a flat
-9-element row instead of a nested 3x3 list (the `q` / `FixedSizeList[Float64, 4]`
-cast has no such restriction and needed no change). `tests/test_rotation.py`
-was corrected the same way: `IDENTITY`, the quarter-turn matrix, and the
-non-rotation "junk" matrix are all flat, row-major, 9-element lists. All
-three assertions are unchanged from the brief; only the input shape changed.
+`probe/dump_schema.py` builds the tensor column from a flat 9-element row
+instead of a nested 3x3 list (the `q` / `FixedSizeList[Float64, 4]` cast has
+no such restriction). `tests/test_rotation.py` follows the same shape:
+`IDENTITY`, the quarter-turn matrix, and the non-rotation "junk" matrix are
+all flat, row-major, 9-element lists.
 
 ### Verbatim probe output
 
@@ -75,7 +74,7 @@ and the `to_arrow()` pyarrow types below it, are the ground truth.)
 ### What this means for `src/ffi.rs`
 
 - **`FixedSizeList[Float64, 4]`** (the `q` quaternion column in the probe;
-  used by later tasks): child field name is `"item"`, child nullable `True`,
+  used by the quaternion kernels): child field name is `"item"`, child nullable `True`,
   outer field nullable `True`. This is arrow-rs's own default child name for
   `FixedSizeListArray`, so `FixedRows` needs no special-casing for it.
 
@@ -85,7 +84,7 @@ and the `to_arrow()` pyarrow types below it, are the ground truth.)
   `FixedSizeList<item: double>[9]` (child name `"item"`, child nullable
   `True`, outer field nullable `True`).
 
-  The open question the brief flags is what the **arrow-rs** side of the
+  The open question is what the **arrow-rs** side of the
   `daft-ext` FFI boundary (`import_array`/`import_field` in
   `daft-ext/src/helpers.rs`, via `arrow_array_57::ffi::from_ffi` /
   `Field::try_from`) sees for this column, since arrow-rs's `DataType` enum
@@ -122,5 +121,5 @@ Python must supply a **flat 9-element list per row**, then
 `.cast(daft.DataType.tensor(daft.DataType.float64(), (3, 3)))`. Supplying a
 nested `[[...], [...], [...]]` per row raises `DaftError::ComputeError
 Cannot cast List to FixedSizeList because not all elements have sizes: 9` at
-`.collect()`/`.to_arrow()`/`.to_pydict()` time. This applies to every later
-task that constructs 3x3-matrix test fixtures.
+`.collect()`/`.to_arrow()`/`.to_pydict()` time. This applies to any
+3x3-matrix fixture.

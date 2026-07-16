@@ -42,22 +42,13 @@ impl DaftScalarFunction for GeodesicAngle {
 }
 
 fn geodesic_kernel(a: &ArrayRef, b: &ArrayRef) -> DaftResult<ArrayRef> {
-    // Width comes from probe/GROUND-TRUTH.md. If a 3x3 tensor is not a
-    // FixedSizeList[Float64, 9], replace FixedRows with the TensorRows
-    // accessor written in Step 3.
+    // Width comes from probe/GROUND-TRUTH.md: a 3x3 tensor is a
+    // FixedSizeList[Float64, 9] at this FFI boundary.
     let a = FixedRows::new(a, 9, "rotation_geodesic_angle: left")?;
     let b = FixedRows::new(b, 9, "rotation_geodesic_angle: right")?;
-    if a.len() != b.len() {
-        // DaftError has exactly two variants, TypeError and RuntimeError.
-        // There is no ValueError.
-        return Err(DaftError::RuntimeError(format!(
-            "rotation_geodesic_angle: length mismatch, {} vs {}",
-            a.len(),
-            b.len()
-        )));
-    }
-    let out: Float64Array = (0..a.len())
-        .map(|i| match (a.get_vec(i), b.get_vec(i)) {
+    let n = crate::ffi::broadcast_len(&[a.len(), b.len()], "rotation_geodesic_angle")?;
+    let out: Float64Array = (0..n)
+        .map(|i| match (a.get_vec_broadcast(i), b.get_vec_broadcast(i)) {
             (Some(x), Some(y)) => math::geodesic_angle(&x, &y),
             _ => None,
         })
@@ -96,7 +87,10 @@ impl DaftScalarFunction for MatrixToQuat {
         let mut builder = FixedSizeListBuilder::new(Float64Builder::new(), 4);
         for i in 0..rows.len() {
             let q = rows.get_vec(i).and_then(|m| {
-                let m: [f64; 9] = m.try_into().ok()?;
+                let m: [f64; 9] = match m.try_into() {
+                    Ok(m) => m,
+                    Err(_) => unreachable!("FixedRows::new pinned the width to 9"),
+                };
                 // None for a matrix outside SO(3), which is how null propagates.
                 math::mat_to_quat(m)
             });
@@ -136,7 +130,7 @@ impl DaftScalarFunction for QuatInverse {
     fn call(&self, args: Vec<ArrowData>) -> DaftResult<ArrowData> {
         let mut it = args.into_iter();
         let (schema, data) = {
-            let d = it.next().expect("arity checked");
+            let d = it.next().expect("arity checked in return_field");
             (import_field(&d.schema)?, d)
         };
         let order = resolve_order(&schema, self.0)?;
@@ -181,8 +175,8 @@ impl DaftScalarFunction for QuatMultiply {
 
     fn call(&self, args: Vec<ArrowData>) -> DaftResult<ArrowData> {
         let mut it = args.into_iter();
-        let a_data = it.next().expect("arity checked");
-        let b_data = it.next().expect("arity checked");
+        let a_data = it.next().expect("arity checked in return_field");
+        let b_data = it.next().expect("arity checked in return_field");
         let a_order = resolve_order(&import_field(&a_data.schema)?, self.0)?;
         let b_order = resolve_order(&import_field(&b_data.schema)?, self.0)?;
 
@@ -224,7 +218,7 @@ impl DaftScalarFunction for Rot6dToMatrix {
     }
 
     fn call(&self, args: Vec<ArrowData>) -> DaftResult<ArrowData> {
-        let r = import_array(args.into_iter().next().expect("arity checked"))?;
+        let r = import_array(args.into_iter().next().expect("arity checked in return_field"))?;
         let rows = FixedRows::new(&r, 6, "rot6d_to_matrix")?;
 
         let mut builder = FixedSizeListBuilder::new(Float64Builder::new(), 9);
@@ -261,7 +255,7 @@ impl DaftScalarFunction for QuatToMatrix {
     }
 
     fn call(&self, args: Vec<ArrowData>) -> DaftResult<ArrowData> {
-        let data = args.into_iter().next().expect("arity checked");
+        let data = args.into_iter().next().expect("arity checked in return_field");
         let order = resolve_order(&import_field(&data.schema)?, self.0)?;
         let q = import_array(data)?;
         let rows = FixedRows::new(&q, 4, "quat_to_matrix")?;
@@ -303,8 +297,8 @@ impl DaftScalarFunction for QuatRotate {
 
     fn call(&self, args: Vec<ArrowData>) -> DaftResult<ArrowData> {
         let mut it = args.into_iter();
-        let q_data = it.next().expect("arity checked");
-        let v_data = it.next().expect("arity checked");
+        let q_data = it.next().expect("arity checked in return_field");
+        let v_data = it.next().expect("arity checked in return_field");
         let order = resolve_order(&import_field(&q_data.schema)?, self.0)?;
 
         let q = import_array(q_data)?;

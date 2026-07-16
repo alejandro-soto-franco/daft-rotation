@@ -14,10 +14,10 @@ Currently, this package builds only against a local Daft checkout, and it must b
 git clone https://github.com/eventual-inc/daft.git
 git clone https://github.com/alejandrosotofranco/daft-rotation.git
 cd daft-rotation
-pip install -e .
+uv sync
 ```
 
-This leaves `daft` and `daft-rotation` as siblings under the same parent directory. It is necessary because the published `daft-ext` SDK has not yet stabilised its API and lacks the prelude helpers and the `daft_extension` macro this crate depends on. Once the extension system reaches stability, standard `pip install daft-rotation` will work.
+Use `uv sync`, not `pip install -e .`: `pyproject.toml` declares `dependencies = ["daft"]`, a bare PyPI requirement, and the `[tool.uv.sources]` entry that redirects it to the sibling checkout is a uv-only override that plain `pip` never reads. Under `pip install -e .`, `daft` resolves from PyPI instead, leaving you with PyPI's Python API running against a cdylib compiled against `../daft/src/daft-ext`, a version mismatch between the two. `uv sync` honours `[tool.uv.sources]` and installs the sibling `../daft` editable, leaving `daft` and `daft-rotation` as true siblings under the same parent directory. This is necessary because the published `daft-ext` SDK has not yet stabilised its API and lacks the prelude helpers and the `daft_extension` macro this crate depends on. Once the extension system reaches stability, standard `pip install daft-rotation` will work.
 
 ## Example
 
@@ -134,7 +134,7 @@ The library reports the evidence, never decides. You then declare it explicitly.
 | `rot6d_to_matrix(r)` | Convert 6D rotation representation to a 3×3 matrix. |
 | `rotation_geodesic_angle(a, b)` | Angle (radians) of relative rotation between two 3×3 matrices. |
 
-The `order` parameter is optional for functions ending in `_multiply`, `_inverse`, `_to_matrix`, or `_rotate`: pass `None` (default) to read the convention from the column's dtype, or a string to override. For matrices and raw columns, `order` is required.
+The `order` parameter is optional for `quat_multiply`, `quat_inverse`, `quat_to_matrix`, and `quat_rotate`: pass `None` (default) to read the convention from the column's dtype, or a string to override. For `matrix_to_quat`, and for a plain (untyped) column passed to any of the four, `order` is required.
 
 ## Status
 

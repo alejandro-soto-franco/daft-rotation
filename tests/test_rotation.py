@@ -48,6 +48,26 @@ def test_geodesic_angle_is_null_outside_so3(sess):
     assert out["a"][0] is None
 
 
+def test_geodesic_angle_broadcasts_a_literal_against_a_trajectory(sess):
+    """A length-1 literal must broadcast against a longer column.
+
+    Every other multi-argument function (quat_multiply, quat_rotate) broadcasts
+    a length-1 argument against a longer one; rotation_geodesic_angle must too,
+    since comparing a trajectory against one reference pose is its natural use.
+    """
+    quarter = [0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    mat3 = daft.DataType.tensor(daft.DataType.float64(), (3, 3))
+    df = daft.from_pydict({"a": [IDENTITY, quarter]})
+    df = df.select(df["a"].cast(mat3))
+    identity_lit = daft.lit(IDENTITY).cast(mat3)
+
+    out = df.select(rotation_geodesic_angle(df["a"], identity_lit)).to_pydict()
+
+    # Each row's angle against the identity is that row's own rotation angle:
+    # the identity row is 0, the quarter turn is pi/2.
+    assert out["a"] == pytest.approx([0.0, math.pi / 2], abs=1e-9)
+
+
 I_XYZW = [0.0, 0.0, 0.0, 1.0]
 MAT3 = daft.DataType.tensor(daft.DataType.float64(), (3, 3))
 

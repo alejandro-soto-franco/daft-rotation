@@ -2,14 +2,15 @@
 
 Not part of the package. Run it, paste the output into probe/GROUND-TRUTH.md.
 
-Deviation from the task brief's literal script: casting a *nested* list of
-lists (``[[1,0,0],[0,1,0],[0,0,1]]``) directly to ``Tensor[Float64, (3, 3)]``
-raises ``DaftError::ComputeError Cannot cast List to FixedSizeList because
-not all elements have sizes: 9`` on this Daft build. Daft's own
-``tests/expressions/test_rotation.py`` casts from a *flattened* 9-element row
-instead (``m.flatten().tolist()`` before ``.cast(MAT3)``), so the tensor
-column below is built from a flat list per row to match the interface Daft
-actually accepts. The 4-wide quaternion cast has no such restriction.
+This script builds the tensor column from a flat 9-element row because
+casting a *nested* list of lists (``[[1,0,0],[0,1,0],[0,0,1]]``) directly to
+``Tensor[Float64, (3, 3)]`` raises ``DaftError::ComputeError Cannot cast List
+to FixedSizeList because not all elements have sizes: 9`` on this Daft
+build. Daft's own ``tests/expressions/test_rotation.py`` casts from a
+*flattened* 9-element row instead (``m.flatten().tolist()`` before
+``.cast(MAT3)``), so the tensor column below is built the same way to match
+the interface Daft actually accepts. The 4-wide quaternion cast has no such
+restriction.
 """
 
 from __future__ import annotations
