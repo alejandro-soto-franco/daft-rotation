@@ -58,7 +58,9 @@ pub(crate) fn resolve_order(field: &Field, from_name: Option<QuatOrder>) -> Daft
 
     let raw = field.metadata().get(EXT_META_KEY).ok_or_else(|| {
         DaftError::TypeError(format!(
-            "column '{}' is tagged {QUAT_EXT_NAME} but records no component order",
+            "column '{}' is tagged {QUAT_EXT_NAME} but records no component order. \
+             Add ARROW:extension:metadata of \"xyzw\" or \"wxyz\", or build the \
+             field with quat(col, order).",
             field.name()
         ))
     })?;
@@ -152,7 +154,17 @@ mod tests {
         let err = resolve_order(&typed("xyzw"), Some(QuatOrder::Wxyz))
             .unwrap_err()
             .to_string();
-        assert!(err.contains("xyzw") && err.contains("wxyz"), "{err}");
+        // Assert on the actual phrases in their roles, not just presence of the
+        // two words: a message with xyzw and wxyz swapped would tell the user
+        // the exact opposite of the truth and must fail this test.
+        assert!(
+            err.contains("declares component order xyzw"),
+            "message must say the column declares xyzw: {err}"
+        );
+        assert!(
+            err.contains("wxyz was requested"),
+            "message must say wxyz was requested: {err}"
+        );
     }
 
     #[test]
@@ -185,6 +197,42 @@ mod tests {
         md.insert(EXT_NAME_KEY.to_string(), QUAT_EXT_NAME.to_string());
         let tagged = plain().with_metadata(md);
         assert!(resolve_order(&tagged, None).is_err());
+    }
+
+    #[test]
+    fn metadata_without_extension_name_is_not_ours() {
+        // The metadata key alone, without the extension-name key, must never
+        // confer an order: a field like this behaves exactly like a plain
+        // column, because metadata is only ours to interpret once the name
+        // marks the field as ours.
+        let mut md = HashMap::new();
+        md.insert(EXT_META_KEY.to_string(), "xyzw".to_string());
+        let f = plain().with_metadata(md);
+        assert!(!is_quat_ext(&f));
+
+        let err = resolve_order(&f, None).unwrap_err().to_string();
+        assert!(err.contains("infer_quat_order"), "{err}");
+
+        assert_eq!(
+            resolve_order(&f, Some(QuatOrder::Wxyz)).unwrap(),
+            QuatOrder::Wxyz
+        );
+    }
+
+    #[test]
+    fn metadata_order_matching_is_case_insensitive() {
+        // QuatOrder::parse lowercases before matching, so upper-case metadata
+        // still resolves correctly. This is not a guess: the value is still
+        // one of the two known orders, just spelled differently.
+        assert_eq!(resolve_order(&typed("XYZW"), None).unwrap(), QuatOrder::Xyzw);
+    }
+
+    #[test]
+    fn metadata_order_matching_is_not_trimmed() {
+        // QuatOrder::parse does not trim, so a leading space makes the value
+        // unrecognised and must fail closed rather than silently match.
+        let err = resolve_order(&typed(" xyzw"), None).unwrap_err().to_string();
+        assert!(err.contains(" xyzw"), "{err}");
     }
 
     #[test]
