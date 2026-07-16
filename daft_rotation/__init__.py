@@ -16,8 +16,12 @@ from typing import Literal
 import daft
 from daft.expressions import Expression
 
+from daft_rotation._infer import OrderReport, infer_quat_order
+
 __all__ = [
+    "OrderReport",
     "QuatOrder",
+    "infer_quat_order",
     "matrix_to_quat",
     "quat",
     "quat_inverse",
