@@ -48,11 +48,11 @@ impl<'a> FixedRows<'a> {
 
     /// The `i`th row, or `None` when the row is null or holds a null component.
     ///
-    /// `FixedSizeListArray::value` computes `(self.offset() + i) * value_length()`
-    /// internally, so this is correct for a sliced parent. Do not replace it with
-    /// `self.array.values()` plus manual arithmetic.
+    /// Parent offsets are folded into child values at construction, so `value(i)`
+    /// correctly handles sliced parents. Do not index `self.array.values()` with
+    /// `i * width` arithmetic; it re-reads the unfolded buffer with a shifted window.
     pub(crate) fn get(&self, i: usize) -> Option<[f64; 4]> {
-        debug_assert_eq!(self.width, 4, "get() is the 4-wide specialisation");
+        assert_eq!(self.width, 4, "get() is the 4-wide specialisation");
         if self.array.is_null(i) {
             return None;
         }
