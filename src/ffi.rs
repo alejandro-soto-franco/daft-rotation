@@ -190,3 +190,35 @@ pub(crate) fn append_row(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Lengths that are neither equal nor 1 must error, not silently truncate.
+    ///
+    /// Not drivable through the public Python API: `daft.DataFrame["col"]`
+    /// resolves an expression by column name, not by the DataFrame instance a
+    /// reference was taken from, and every column reachable from one
+    /// `.select()` call shares that DataFrame's own row count. There is no way
+    /// to hand a single kernel invocation two same-named columns of genuinely
+    /// different length (neither 1) through the public API, so the
+    /// mismatch-must-error contract is pinned here instead. See
+    /// tests/test_typing.py for the record of what was tried and why it could
+    /// not reach this arm.
+    #[test]
+    fn mismatched_lengths_are_rejected() {
+        assert!(broadcast_len(&[3, 5], "x").is_err());
+    }
+
+    #[test]
+    fn a_length_one_argument_broadcasts_against_the_other() {
+        assert_eq!(broadcast_len(&[1, 5], "x").unwrap(), 5);
+        assert_eq!(broadcast_len(&[5, 1], "x").unwrap(), 5);
+    }
+
+    #[test]
+    fn equal_lengths_agree() {
+        assert_eq!(broadcast_len(&[4, 4], "x").unwrap(), 4);
+    }
+}

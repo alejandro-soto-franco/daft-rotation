@@ -169,3 +169,70 @@ def test_null_row_propagates(sess):
     df = df.select(quat(df["q"], "xyzw"))
     out = df.select(quat_inverse(df["q"])).to_pydict()
     assert out["q"][1] is None
+
+
+def test_value_row_after_a_null_row_is_intact(sess):
+    """A null row must not shift the rows after it.
+
+    FixedSizeListBuilder::finish asserts values.len() == len * list_len, so a
+    wrong child count on the null path panics rather than corrupting silently.
+    Every other fixture here is a single row, so nothing exercises a value row
+    following a null one.
+    """
+    junk = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
+    df = _matrices([junk, IDENTITY])
+    out = df.select(matrix_to_quat(df["m"], order="xyzw")).to_pydict()
+    assert out["m"][0] is None
+    x, y, z, w = out["m"][1]
+    assert (x, y, z) == pytest.approx((0.0, 0.0, 0.0), abs=1e-9)
+    assert abs(w) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_broadcast_preserves_values_not_just_length(sess):
+    """Broadcasting must deliver the right values, not merely the right count.
+
+    Multiplying identity by identity cannot distinguish a broadcast bug that
+    returns wrong-but-4-wide data, so use a quarter turn about z whose product
+    with each row is checkable.
+    """
+    quarter_z = [0.0, 0.0, 0.7071067811865476, 0.7071067811865476]
+    fsl = daft.DataType.fixed_size_list(daft.DataType.float64(), 4)
+    df = daft.from_pydict({"a": [quarter_z, quarter_z]})
+    df = df.select(df["a"].cast(fsl))
+    df = df.select(quat(df["a"], "xyzw"))
+    lit = quat(daft.lit(quarter_z).cast(fsl), "xyzw")
+    out = df.select(quat_multiply(df["a"], lit)).to_pydict()
+    assert len(out["a"]) == 2
+    # Two quarter turns about z compose to a half turn about z, on every row.
+    for row in out["a"]:
+        x, y, z, w = row
+        assert (x, y) == pytest.approx((0.0, 0.0), abs=1e-9)
+        assert abs(z) == pytest.approx(1.0, abs=1e-9)
+        assert w == pytest.approx(0.0, abs=1e-9)
+
+
+# test_non_broadcastable_lengths_are_rejected is NOT drivable through the
+# public API. daft.DataFrame["col"] resolves purely by column name, not by
+# the DataFrame instance the reference was taken from: quat(a["q"], ...) and
+# quat(b["q"], ...) both print as col(q), so evaluating them inside
+# a.select(...) makes both operands resolve against a's own "q" column,
+# silently ignoring b's data rather than raising or truncating (verified by
+# hand: the result equals identity*identity, never touching b's rows).
+# Daft's DataFrame model also guarantees every column in one .select() call
+# shares that DataFrame's row count, so there is no way to hand a single
+# kernel invocation two same-named columns of genuinely different length
+# (neither equal nor 1) through the public API. The requirement itself
+# (broadcast_len's mismatch arm must error, not truncate) is pinned directly
+# in Rust instead: see ffi::tests::mismatched_lengths_are_rejected.
+
+
+def test_functions_are_unavailable_without_the_extension():
+    """A session that never loaded the extension must not resolve our functions."""
+    from daft.session import Session
+
+    s = Session()
+    with s:
+        df = daft.from_pydict({"q": [[0.0, 0.0, 0.0, 1.0]]})
+        df = df.select(df["q"].cast(daft.DataType.fixed_size_list(daft.DataType.float64(), 4)))
+        with pytest.raises(Exception, match="not found"):
+            df.select(quat_inverse(df["q"], order="xyzw")).collect()
