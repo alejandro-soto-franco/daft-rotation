@@ -1,0 +1,16 @@
+[workspace]
+
+[package]
+name = "daft-rotation"
+edition = "2024"
+version = "0.1.0"
+
+[lib]
+name = "daft_rotation"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+daft-ext = {path = "../daft/src/daft-ext", features = ["arrow-57"]}
+arrow-array = {version = "57.1.0", features = ["chrono-tz"]}
+arrow-buffer = "57.1.0"
+arrow-schema = "57.1.0"

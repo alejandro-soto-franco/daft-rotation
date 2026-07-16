@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools", "setuptools-rust"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "daft-rotation"
+version = "0.1.0"
+description = "Quaternion, 6D, and SO(3) rotation expressions for Daft"
+requires-python = ">=3.10"
+dependencies = ["daft"]
+
+[project.optional-dependencies]
+test = ["pytest", "numpy"]
+
+[tool.uv.sources]
+daft = {path = "../daft", editable = true}
