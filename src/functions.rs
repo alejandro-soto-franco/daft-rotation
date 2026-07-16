@@ -1,9 +1,16 @@
 use std::{ffi::CStr, sync::Arc};
 
-use arrow_array::{ArrayRef, Float64Array};
+use arrow_array::{
+    ArrayRef, Float64Array,
+    builder::{FixedSizeListBuilder, Float64Builder},
+};
 use daft_ext::prelude::{ArrowData, ArrowSchema, DaftError, DaftResult, DaftScalarFunction, export_array, export_field, import_array, import_field};
 
-use crate::{ffi::{FixedRows, float64_field}, math};
+use crate::{
+    ffi::{FixedRows, float64_field, quat_storage},
+    math::{self, QuatOrder},
+    order::quat_field,
+};
 
 pub(crate) struct GeodesicAngle;
 
@@ -55,4 +62,60 @@ fn geodesic_kernel(a: &ArrayRef, b: &ArrayRef) -> DaftResult<ArrayRef> {
         })
         .collect();
     Ok(Arc::new(out))
+}
+
+/// A 3x3 rotation matrix to a quaternion, in the order the variant names.
+pub(crate) struct MatrixToQuat(pub(crate) QuatOrder);
+
+impl DaftScalarFunction for MatrixToQuat {
+    fn name(&self) -> &CStr {
+        match self.0 {
+            QuatOrder::Xyzw => c"rotation_matrix_to_quat_xyzw",
+            QuatOrder::Wxyz => c"rotation_matrix_to_quat_wxyz",
+        }
+    }
+
+    fn return_field(&self, args: &[ArrowSchema]) -> DaftResult<ArrowSchema> {
+        if args.len() != 1 {
+            return Err(DaftError::TypeError(format!(
+                "matrix_to_quat expects 1 argument, got {}",
+                args.len()
+            )));
+        }
+        let field = import_field(&args[0])?;
+        // No quaternion input to read a convention from, so the order always
+        // comes from the name. resolve_order is not consulted.
+        export_field(&quat_field(field.name(), self.0, quat_storage()))
+    }
+
+    fn call(&self, args: Vec<ArrowData>) -> DaftResult<ArrowData> {
+        let m = import_array(args.into_iter().next().expect("arity checked in return_field"))?;
+        let rows = FixedRows::new(&m, 9, "matrix_to_quat")?;
+
+        let mut builder = FixedSizeListBuilder::new(Float64Builder::new(), 4);
+        for i in 0..rows.len() {
+            match rows.get_vec(i).and_then(|m| {
+                let m: [f64; 9] = m.try_into().ok()?;
+                // None for a matrix outside SO(3), which is how null propagates.
+                math::mat_to_quat(m)
+            }) {
+                Some(q) => {
+                    for c in self.0.write(q) {
+                        builder.values().append_value(c);
+                    }
+                    builder.append(true);
+                }
+                None => {
+                    for _ in 0..4 {
+                        builder.values().append_null();
+                    }
+                    builder.append(false);
+                }
+            }
+        }
+        let out: ArrayRef = Arc::new(builder.finish());
+        // export_array drops metadata, which is irrelevant: the host wraps the
+        // result with return_field's field and checks only the physical type.
+        export_array(out, "matrix_to_quat")
+    }
 }

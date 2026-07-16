@@ -11,10 +11,53 @@ pass ``order=`` per call, or discover it with ``infer_quat_order``.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import daft
 from daft.expressions import Expression
 
-__all__ = ["rotation_geodesic_angle"]
+__all__ = ["matrix_to_quat", "rotation_geodesic_angle"]
+
+QuatOrder = Literal["xyzw", "wxyz"]
+
+_ORDERS = ("xyzw", "wxyz")
+
+
+def _check_order(order: str) -> str:
+    """Validate an order string before it can reach a function name.
+
+    Raising here means an unrecognised convention never becomes a failed
+    function lookup, whose error would name a function the user never typed.
+    """
+    if order not in _ORDERS:
+        raise ValueError(
+            f"component order {order!r} is not recognised; expected one of {_ORDERS}"
+        )
+    return order
+
+
+def matrix_to_quat(matrix: Expression, *, order: QuatOrder) -> Expression:
+    """Converts a 3x3 rotation matrix into a quaternion.
+
+    Uses Shepperd's method, which stays numerically stable near a half turn where
+    the naive trace formula loses precision. The sign is not canonicalised, since a
+    quaternion and its negation denote the same rotation.
+
+    The matrix is tested for membership in ``SO(3)`` first, so one that is scaled,
+    is a shear, is a reflection, or holds a non-finite value produces null rather
+    than a plausible quaternion.
+
+    The result carries ``order`` in its dtype, so downstream calls need not repeat it.
+
+    Args:
+        matrix (Tensor[Float64, [3, 3]] Expression): The rotation matrix.
+        order (str): Component order of the result, either "xyzw" or "wxyz".
+            Required: there is no default convention.
+
+    Returns:
+        Expression (Quaternion Expression): The quaternion, extension-typed.
+    """
+    return daft.get_function(f"rotation_matrix_to_quat_{_check_order(order)}", matrix)
 
 
 def rotation_geodesic_angle(left: Expression, right: Expression) -> Expression:

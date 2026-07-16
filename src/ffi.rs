@@ -5,6 +5,8 @@
 //! input carries a non-zero offset and that arithmetic silently reads the
 //! wrong window. See tests/test_slices.py.
 
+use std::sync::Arc;
+
 use arrow_array::{Array, ArrayRef, FixedSizeListArray, Float64Array, cast::AsArray};
 use arrow_schema::{DataType, Field};
 use daft_ext::prelude::{DaftError, DaftResult};
@@ -84,4 +86,13 @@ impl<'a> FixedRows<'a> {
 /// A plain nullable `Float64` output field.
 pub(crate) fn float64_field(name: &str) -> Field {
     Field::new(name, DataType::Float64, true)
+}
+
+/// The storage type of a quaternion column.
+///
+/// The child field name and nullability must match what Daft produces, or
+/// `DataArray::from_arrow` rejects the array. Taken from probe/GROUND-TRUTH.md,
+/// which records child name "item", child nullable true, outer nullable true.
+pub(crate) fn quat_storage() -> DataType {
+    DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float64, true)), 4)
 }
