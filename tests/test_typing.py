@@ -81,3 +81,91 @@ def test_invalid_order_fails_in_python(sess):
     df = _matrices([IDENTITY])
     with pytest.raises(ValueError, match="wxzy"):
         matrix_to_quat(df["m"], order="wxzy")
+
+
+from daft_rotation import quat, quat_inverse, quat_multiply
+
+I_XYZW = [0.0, 0.0, 0.0, 1.0]
+
+
+def _quats(rows, order=None):
+    df = daft.from_pydict({"q": rows})
+    df = df.select(df["q"].cast(daft.DataType.fixed_size_list(daft.DataType.float64(), 4)))
+    if order is not None:
+        df = df.select(quat(df["q"], order))
+    return df
+
+
+def test_typed_column_needs_no_order_argument(sess):
+    df = _quats([I_XYZW], order="xyzw")
+    out = df.select(quat_inverse(df["q"])).to_pydict()
+    assert out["q"][0] == pytest.approx([0.0, 0.0, 0.0, 1.0], abs=1e-9)
+
+
+def test_plain_column_without_order_is_rejected_at_plan_time(sess):
+    df = _quats([I_XYZW])
+    with pytest.raises(Exception, match="infer_quat_order"):
+        df.select(quat_inverse(df["q"])).collect()
+
+
+def test_plain_column_with_order_works(sess):
+    df = _quats([I_XYZW])
+    out = df.select(quat_inverse(df["q"], order="xyzw")).to_pydict()
+    assert out["q"][0] == pytest.approx([0.0, 0.0, 0.0, 1.0], abs=1e-9)
+
+
+def test_order_disagreeing_with_the_dtype_is_rejected(sess):
+    df = _quats([I_XYZW], order="xyzw")
+    with pytest.raises(Exception, match="wxyz"):
+        df.select(quat_inverse(df["q"], order="wxyz")).collect()
+
+
+def test_mixed_conventions_compose_correctly(sess):
+    """An Eigen wxyz column and a ROS xyzw column must compose.
+
+    Both normalise to canonical (w,x,y,z) on the way in, so this is a real
+    capability rather than an accident.
+    """
+    half_z_xyzw = [0.0, 0.0, 0.7071067811865476, 0.7071067811865476]
+    half_z_wxyz = [0.7071067811865476, 0.0, 0.0, 0.7071067811865476]
+    df = daft.from_pydict({"a": [half_z_xyzw], "b": [half_z_wxyz]})
+    fsl = daft.DataType.fixed_size_list(daft.DataType.float64(), 4)
+    df = df.select(df["a"].cast(fsl), df["b"].cast(fsl))
+    df = df.select(quat(df["a"], "xyzw"), quat(df["b"], "wxyz"))
+    out = df.select(quat_multiply(df["a"], df["b"])).to_pydict()
+    # Two quarter turns about z compose to a half turn about z.
+    x, y, z, w = out["a"][0]
+    assert (x, y) == pytest.approx((0.0, 0.0), abs=1e-9)
+    assert abs(z) == pytest.approx(1.0, abs=1e-9)
+    assert w == pytest.approx(0.0, abs=1e-9)
+
+
+def test_output_takes_the_first_typed_arguments_order(sess):
+    half_z_xyzw = [0.0, 0.0, 0.7071067811865476, 0.7071067811865476]
+    half_z_wxyz = [0.7071067811865476, 0.0, 0.0, 0.7071067811865476]
+    df = daft.from_pydict({"a": [half_z_xyzw], "b": [half_z_wxyz]})
+    fsl = daft.DataType.fixed_size_list(daft.DataType.float64(), 4)
+    df = df.select(df["a"].cast(fsl), df["b"].cast(fsl))
+    df = df.select(quat(df["a"], "xyzw"), quat(df["b"], "wxyz"))
+    # Compare with ==, not str(): Display omits the metadata.
+    dtype = df.select(quat_multiply(df["a"], df["b"])).schema()["a"].dtype
+    assert dtype == QUAT_XYZW, f"expected the left argument's order, got {dtype}"
+
+
+def test_multiply_broadcasts_a_single_row(sess):
+    df = daft.from_pydict({"a": [I_XYZW, I_XYZW, I_XYZW]})
+    fsl = daft.DataType.fixed_size_list(daft.DataType.float64(), 4)
+    df = df.select(df["a"].cast(fsl))
+    df = df.select(quat(df["a"], "xyzw"))
+    lit = daft.lit(I_XYZW).cast(fsl)
+    out = df.select(quat_multiply(df["a"], quat(lit, "xyzw"))).to_pydict()
+    assert len(out["a"]) == 3
+
+
+def test_null_row_propagates(sess):
+    df = daft.from_pydict({"q": [I_XYZW, None]})
+    fsl = daft.DataType.fixed_size_list(daft.DataType.float64(), 4)
+    df = df.select(df["q"].cast(fsl))
+    df = df.select(quat(df["q"], "xyzw"))
+    out = df.select(quat_inverse(df["q"])).to_pydict()
+    assert out["q"][1] is None

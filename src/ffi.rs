@@ -96,3 +96,26 @@ pub(crate) fn float64_field(name: &str) -> Field {
 pub(crate) fn quat_storage() -> DataType {
     DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float64, true)), 4)
 }
+
+/// The output length for a set of argument lengths.
+///
+/// A length-1 argument broadcasts against a longer one, matching how Daft
+/// treats a literal. Any other disagreement is an error.
+pub(crate) fn broadcast_len(lens: &[usize], what: &str) -> DaftResult<usize> {
+    let n = lens.iter().copied().max().unwrap_or(0);
+    for &l in lens {
+        if l != n && l != 1 {
+            return Err(DaftError::RuntimeError(format!(
+                "{what}: cannot broadcast lengths {lens:?}"
+            )));
+        }
+    }
+    Ok(n)
+}
+
+impl FixedRows<'_> {
+    /// The `i`th row, treating a length-1 column as a broadcast constant.
+    pub(crate) fn get_broadcast(&self, i: usize) -> Option<[f64; 4]> {
+        self.get(if self.len() == 1 { 0 } else { i })
+    }
+}
