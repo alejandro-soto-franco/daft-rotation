@@ -111,7 +111,7 @@ and the `to_arrow()` pyarrow types below it, are the ground truth.)
   identity is transparent to arrow-rs at this boundary; it is not exposed as
   a distinct `DataType`.
 
-  Conclusion: **no `TensorRows` accessor was needed.** `FixedRows::get_vec`
+  Conclusion: **no tensor-specific row accessor is needed.** `FixedRows::get_vec`
   with `width = 9` is correct and is what `src/functions.rs` uses.
 
 ### Practical implication for constructing tensor-typed test data
