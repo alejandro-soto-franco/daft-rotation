@@ -59,7 +59,38 @@ def test_flags_a_column_that_is_not_unit_quaternions():
     df = daft.from_pydict({"q": [[1.0, 2.0, 3.0, 4.0]] * 10})
     report = infer_quat_order(df, "q")
     assert report.unit_norm is False
+    assert report.likely is None
+    assert report.confidence == "low"
     assert "not unit" in str(report).lower()
+    assert "confidence: high" not in str(report)
+    assert "declare it with" not in str(report)
+
+
+def test_no_order_verdict_for_non_unit_data_that_would_otherwise_separate():
+    """Homogeneous-coordinate-style rows [x, y, z, 1.0] with small x, y, z.
+
+    Slot 3 sits at exactly 1.0 and slot 0 is small, so the slots WOULD
+    separate cleanly into a confident order verdict. But the sum of squares
+    is nowhere near 1, so this is not a quaternion column at all, and the
+    report must refuse to name an order regardless of how the slots look.
+    """
+    rng = random.Random(2)
+    rows = []
+    for _ in range(500):
+        x, y, z = (rng.uniform(-0.1, 0.1) for _ in range(3))
+        rows.append([x, y, z, 1.0])
+    df = daft.from_pydict({"q": rows})
+    report = infer_quat_order(df, "q")
+
+    assert report.unit_norm is False
+    assert report.likely is None
+    assert report.confidence == "low"
+
+    text = str(report)
+    assert "confidence: high" not in text
+    assert "declare it with" not in text
+    assert "neither slot concentrates" not in text
+    assert "not unit" in text.lower()
 
 
 def test_report_renders_both_slots():

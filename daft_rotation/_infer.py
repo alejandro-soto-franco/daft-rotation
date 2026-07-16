@@ -43,7 +43,12 @@ class OrderReport:
                 "  sum of squares is not 1: this column is not unit quaternions, "
                 "so component order is not the first problem to solve"
             )
-        if self.likely is None:
+            lines.append(
+                "  the order question is not answerable: these four floats are not "
+                "rotations, so they have no component order to find. Check what the "
+                "column actually holds before asking about convention."
+            )
+        elif self.likely is None:
             lines.append(
                 "  likely: undetermined (confidence: low)\n"
                 "  neither slot concentrates near |1|, which happens when rotations "
@@ -101,7 +106,11 @@ def infer_quat_order(df: daft.DataFrame, column: str, n: int = 1000) -> OrderRep
     hi, lo = max(s0, s3), min(s0, s3)
     separated = hi > 0.9 and lo < 0.3
 
-    if not separated:
+    if not unit_norm or not separated:
+        # A column that fails the unit-norm check is not quaternions at all, so
+        # no order verdict is produced regardless of how the slots happen to
+        # look. Reporting a confident order underneath a "not unit quaternions"
+        # warning would be the tool guessing on the user's behalf.
         likely, confidence = None, "low"
     else:
         likely = "xyzw" if s3 > s0 else "wxyz"
