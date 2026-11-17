@@ -2,9 +2,9 @@
 
 Native quaternion, 6D, and SO(3) rotation expressions for the Daft query engine.
 
-## Why
+## Motivation
 
-Rotations are the most common non-scalar quantity in robot trajectory, camera extrinsic, and hand-joint-orientation datasets. Daft stores them as columns of floats without semantics. This extension operates on them natively, so composing, inverting, and comparing rotations does not require a Python user-defined function.
+Rotations are the most common non-scalar quantity in robot trajectory, camera extrinsic, and hand-joint-orientation datasets. Daft stores them as columns of floats without semantics. This extension operates on them natively. Composing, inverting, and comparing rotations needs no Python user-defined function.
 
 ## Install
 
@@ -17,7 +17,7 @@ cd daft-rotation
 uv sync
 ```
 
-Use `uv sync`, not `pip install -e .`: `pyproject.toml` declares `dependencies = ["daft"]`, a bare PyPI requirement, and the `[tool.uv.sources]` entry that redirects it to the sibling checkout is a uv-only override that plain `pip` never reads. Under `pip install -e .`, `daft` resolves from PyPI instead, leaving you with PyPI's Python API running against a cdylib compiled against `../daft/src/daft-ext`, a version mismatch between the two. `uv sync` honours `[tool.uv.sources]` and installs the sibling `../daft` editable, leaving `daft` and `daft-rotation` as true siblings under the same parent directory. This is necessary because the published `daft-ext` SDK has not yet stabilised its API and lacks the prelude helpers and the `daft_extension` macro this crate depends on. Once the extension system reaches stability, standard `pip install daft-rotation` will work.
+Use `uv sync`, not `pip install -e .`: `pyproject.toml` declares `dependencies = ["daft"]`, a bare PyPI requirement, and the `[tool.uv.sources]` entry that redirects it to the sibling checkout is a uv-only override that plain `pip` never reads. Under `pip install -e .`, `daft` resolves from PyPI instead. PyPI's Python API then runs against a cdylib compiled against `../daft/src/daft-ext`, and the two versions mismatch. `uv sync` honours `[tool.uv.sources]` and installs the sibling `../daft` editable; `daft` and `daft-rotation` are then siblings under the same parent directory. This is necessary because the published `daft-ext` SDK has not yet stabilised its API and lacks the prelude helpers and the `daft_extension` macro this crate depends on. Once the extension system reaches stability, standard `pip install daft-rotation` will work.
 
 ## Example
 
